@@ -1,0 +1,1560 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+    <meta name="apple-mobile-web-app-capable" content="yes">
+    <meta name="mobile-web-app-capable" content="yes">
+    <title>Pick Jumper</title>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/phaser/3.55.2/phaser.min.js"></script>
+    <style>
+        html, body {
+            margin: 0;
+            padding: 0;
+            background-color: #111;
+            width: 100%;
+            height: 100%;
+            overflow: hidden;
+            touch-action: manipulation;
+            -webkit-touch-callout: none;
+            -webkit-user-select: none;
+            -khtml-user-select: none;
+            -moz-user-select: none;
+            -ms-user-select: none;
+            user-select: none;
+            -webkit-tap-highlight-color: transparent;
+        }
+        
+        body {
+            display: flex;
+            justify-content: center;
+            align-items: center;
+            height: 100vh;
+            font-family: 'Courier New', monospace;
+            color: #fff;
+        }
+        #game-container {
+            width: 100%;
+            max-width: 800px;
+            height: 400px;
+            margin: 0 auto;
+            position: relative;
+            touch-action: manipulation;
+        }
+        canvas {
+            display: block;
+            margin: 0 auto;
+            image-rendering: pixelated;
+        }
+        #instructions {
+            text-align: center;
+            margin-top: 20px;
+            font-size: 16px;
+            color: #fff;
+            text-shadow: 1px 1px 2px #000;
+            font-weight: bold;
+        }
+        #logo {
+            text-align: center;
+            margin-bottom: 20px;
+            font-size: 28px;
+            font-weight: bold;
+            color: #e62954;
+            text-shadow: 3px 3px 0 #50fa7b, -1px -1px 0 #000, 1px -1px 0 #000, -1px 1px 0 #000, 1px 1px 0 #000;
+            letter-spacing: 3px;
+        }
+        .pixel-text {
+            font-family: 'Courier New', monospace;
+            font-weight: bold;
+            letter-spacing: 2px;
+        }
+    </style>
+</head>
+<body>
+    <div id="game-container">
+        <div id="logo" class="pixel-text">PICK JUMPER</div>
+        <div id="instructions">Presiona ESPACIO o TAP para saltar</div>
+    </div>
+
+    <script>
+        // Configuración del juego
+        const config = {
+            type: Phaser.AUTO,
+            width: 320,
+            height: 240,
+            pixelArt: true,
+            parent: 'game-container',
+            input: {
+                activePointers: 2
+            },
+            scale: {
+                mode: Phaser.Scale.FIT,
+                autoCenter: Phaser.Scale.CENTER_BOTH
+            },
+            physics: {
+                default: 'arcade',
+                arcade: {
+                    gravity: { y: 1000 },
+                    debug: false
+                }
+            },
+            scene: {
+                preload: preload,
+                create: create,
+                update: update
+            }
+        };
+
+        // Variables globales
+        let player;
+        let obstacles;
+        let pickups;
+        let ground;
+        let score = 0;
+        let picksCollected = 0;
+        let scoreText;
+        let picksText;
+        let gameOver = false;
+        let gameSpeed = 150; // Velocidad inicial aún más reducida
+        let lastObstacleTime = 0;
+        let obstacleInterval = 3000; // Intervalo inicial mucho más largo
+        let obstacleChance = 0.4; // Probabilidad inicial muy reducida
+        let isJumping = false;
+        
+        // Variables para edificios y parallax
+        let buildingsBack;
+        let buildingsMid;
+        let buildingsFront;
+        
+        // Frames para animación del jugador
+        let playerFrame = 0;
+        let playerFrameTime = 0;
+        let playerFrameRate = 10; // frames por segundo
+        
+        // Altura del salto
+        const jumpVelocity = -600;
+        
+        // Nueva variable para seguir los niveles de dificultad
+        let difficultyLevel = 1;
+        
+        // Paleta de colores temática de rock/guitarra
+        const colors = {
+            sky: [
+                0x000022, // azul oscuro casi negro (parte superior)
+                0x0d0c4c, // azul oscuro
+                0x1f0f66, // púrpura azulado
+                0x37127e, // púrpura
+                0x530f8c, // púrpura más claro
+                0x900c7f, // fucsia oscuro
+                0xd01168  // rosado (línea de horizonte)
+            ],
+            buildings: [
+                0x0c0b36, // edificios lejanos (tono oscuro de violeta)
+                0x1f0f66, // edificios medios (tono medio de violeta)
+                0x37127e  // edificios cercanos (tono más claro de violeta)
+            ],
+            player: 0x50fa7b, // verde neón para el jugador (igual que los picks)
+            pickup: 0x50fa7b, // verde neón para los guitar picks
+            obstacle: 0xff5555, // rojo para obstáculos básicos
+            ground: 0x333333, // gris para suelo
+            specialObstacle: 0xffaa00, // naranja para obstáculos especiales
+            guitar: 0xd4af37 // dorado para detalles de guitarra
+        };
+
+        // Iniciar juego
+        const game = new Phaser.Game(config);
+
+        // Precargar recursos
+        function preload() {
+            // No usamos precargas de imágenes externas
+            // Generaremos gráficos con la API de Phaser
+        }
+
+        // Crear los elementos del juego
+        function create() {
+            // Fondo con gradiente pixelado mejorado
+            createEnhancedBackground(this);
+            
+            // Crear ciudad con parallax (versión minimalista)
+            createCityscape(this);
+            
+            // Crear texturas para los elementos del juego
+            createGameTextures(this);
+            
+            // Suelo
+            ground = this.physics.add.staticGroup();
+            for (let i = 0; i < game.config.width / 8; i++) {
+                const groundTile = ground.create(i * 8 + 4, game.config.height - 4, 'groundTexture');
+                groundTile.setDisplaySize(8, 8)
+                    .setOrigin(0.5, 0.5)
+                    .refreshBody();
+            }
+            
+            // Jugador con frames para animación (ahora con estilo de rockero)
+            player = this.physics.add.sprite(50, game.config.height - 30, 'playerTexture0');
+            player.setDisplaySize(16, 40);
+            player.setCollideWorldBounds(true);
+            player.setGravityY(1200);
+            
+            // Grupos de obstáculos y pickups
+            obstacles = this.physics.add.group();
+            pickups = this.physics.add.group();
+            
+            // Colisiones
+            this.physics.add.collider(player, ground);
+            this.physics.add.collider(obstacles, ground);
+            this.physics.add.overlap(player, obstacles, hitObstacle, null, this);
+            this.physics.add.overlap(player, pickups, collectPickup, null, this);
+            
+            // Texto de puntuación con mejor legibilidad
+            scoreText = this.add.text(16, 12, 'Score: 0', { 
+                fontSize: '14px', 
+                fill: '#ffffff',
+                fontFamily: 'Courier New',
+                fontWeight: 'bold',
+                stroke: '#000000',
+                strokeThickness: 2,
+                resolution: 2
+            });
+            
+            // Texto de picks recolectados
+            picksText = this.add.text(16, 32, 'Picks: 0', { 
+                fontSize: '14px', 
+                fill: '#50fa7b',
+                fontFamily: 'Courier New',
+                fontWeight: 'bold',
+                stroke: '#000000',
+                strokeThickness: 2,
+                resolution: 2
+            });
+            
+            // Nivel de dificultad
+            difficultyText = this.add.text(16, 52, 'Dificultad: 1', { 
+                fontSize: '14px', 
+                fill: '#e62954',
+                fontFamily: 'Courier New',
+                fontWeight: 'bold',
+                stroke: '#000000',
+                strokeThickness: 2,
+                resolution: 2
+            });
+            
+            // Controles
+            this.input.keyboard.on('keydown-SPACE', () => jump(this));
+            
+            // Configuración optimizada para móviles - permite tap en cualquier parte de la pantalla
+            this.input.on('pointerdown', () => jump(this));
+            this.input.on('touchstart', () => jump(this));
+            
+            // Añadir un área táctil extra para dispositivos móviles (toda la pantalla)
+            const touchArea = this.add.rectangle(
+                game.config.width / 2, 
+                game.config.height / 2,
+                game.config.width, 
+                game.config.height
+            );
+            touchArea.setInteractive();
+            touchArea.input.alwaysEnabled = true;
+            touchArea.on('pointerdown', () => jump(this));
+            touchArea.alpha = 0.001; // Prácticamente invisible pero interactivo
+            
+            // Sistema de generación de objetos (ahora más dinámico)
+            this.time.addEvent({
+                delay: 500, // Evaluar cada medio segundo para una mayor aleatoriedad
+                callback: () => spawnObjects(this),
+                callbackScope: this,
+                loop: true
+            });
+        }
+        
+        // Crear texturas para los elementos del juego
+        function createGameTextures(scene) {
+            // Frames para la animación del jugador corriendo (estilo rockero)
+            
+            // Frame 0 - piernas juntas con guitarra
+            const playerGraphics0 = scene.make.graphics({x: 0, y: 0, add: false});
+            // Cuerpo del personaje
+            playerGraphics0.fillStyle(colors.player, 1);
+            playerGraphics0.fillRect(0, 0, 16, 30); // cuerpo
+            playerGraphics0.fillRect(6, 30, 4, 10); // pierna central
+            
+            // Cabeza con pelo de rockero
+            playerGraphics0.fillRect(2, -8, 12, 8); // cabeza
+            playerGraphics0.fillRect(0, -10, 16, 4); // pelo hacia los lados
+            
+            // Detalles de la guitarra
+            playerGraphics0.fillStyle(colors.guitar, 1);
+            playerGraphics0.fillRect(-4, 10, 4, 15); // mástil de guitarra
+            playerGraphics0.fillRect(-8, 12, 4, 10); // cuerpo de guitarra
+            
+            playerGraphics0.generateTexture('playerTexture0', 16, 40);
+            
+            // Frame 1 - pierna izquierda adelante con guitarra
+            const playerGraphics1 = scene.make.graphics({x: 0, y: 0, add: false});
+            // Cuerpo del personaje
+            playerGraphics1.fillStyle(colors.player, 1);
+            playerGraphics1.fillRect(0, 0, 16, 30); // cuerpo
+            playerGraphics1.fillRect(2, 30, 4, 10); // pierna izquierda
+            playerGraphics1.fillRect(10, 30, 4, 6); // pierna derecha atrás
+            
+            // Cabeza con pelo de rockero
+            playerGraphics1.fillRect(2, -8, 12, 8); // cabeza
+            playerGraphics1.fillRect(0, -10, 16, 4); // pelo hacia los lados
+            
+            // Detalles de la guitarra
+            playerGraphics1.fillStyle(colors.guitar, 1);
+            playerGraphics1.fillRect(-4, 10, 4, 15); // mástil de guitarra
+            playerGraphics1.fillRect(-8, 12, 4, 10); // cuerpo de guitarra
+            
+            playerGraphics1.generateTexture('playerTexture1', 16, 40);
+            
+            // Frame 2 - pierna derecha adelante con guitarra
+            const playerGraphics2 = scene.make.graphics({x: 0, y: 0, add: false});
+            // Cuerpo del personaje
+            playerGraphics2.fillStyle(colors.player, 1);
+            playerGraphics2.fillRect(0, 0, 16, 30); // cuerpo
+            playerGraphics2.fillRect(10, 30, 4, 10); // pierna derecha
+            playerGraphics2.fillRect(2, 30, 4, 6); // pierna izquierda atrás
+            
+            // Cabeza con pelo de rockero
+            playerGraphics2.fillRect(2, -8, 12, 8); // cabeza
+            playerGraphics2.fillRect(0, -10, 16, 4); // pelo hacia los lados
+            
+            // Detalles de la guitarra
+            playerGraphics2.fillStyle(colors.guitar, 1);
+            playerGraphics2.fillRect(-4, 10, 4, 15); // mástil de guitarra
+            playerGraphics2.fillRect(-8, 12, 4, 10); // cuerpo de guitarra
+            
+            playerGraphics2.generateTexture('playerTexture2', 16, 40);
+            
+            // Frame para salto
+            const playerJumpGraphics = scene.make.graphics({x: 0, y: 0, add: false});
+            // Cuerpo del personaje
+            playerJumpGraphics.fillStyle(colors.player, 1);
+            playerJumpGraphics.fillRect(0, 0, 16, 30); // cuerpo
+            playerJumpGraphics.fillRect(2, 30, 4, 5); // pierna izquierda flexionada
+            playerJumpGraphics.fillRect(10, 30, 4, 5); // pierna derecha flexionada
+            
+            // Cabeza con pelo de rockero "al viento"
+            playerJumpGraphics.fillRect(2, -8, 12, 8); // cabeza
+            playerJumpGraphics.fillRect(-2, -10, 20, 4); // pelo elevado al saltar
+            
+            // Detalles de la guitarra en posición de salto
+            playerJumpGraphics.fillStyle(colors.guitar, 1);
+            playerJumpGraphics.fillRect(-4, 10, 4, 15); // mástil de guitarra
+            playerJumpGraphics.fillRect(-8, 12, 4, 10); // cuerpo de guitarra
+            
+            playerJumpGraphics.generateTexture('playerJumpTexture', 16, 40);
+            
+            // Textura para el suelo (escenario de concierto)
+            const groundGraphics = scene.make.graphics({x: 0, y: 0, add: false});
+            groundGraphics.fillStyle(colors.ground, 1);
+            // Superficie del escenario
+            groundGraphics.fillRect(0, 0, 8, 8);
+            // Detalles como luces de escenario
+            if (Math.random() > 0.7) {
+                groundGraphics.fillStyle(colors.pickup, 0.5);
+                groundGraphics.fillRect(3, 1, 2, 2);
+            }
+            groundGraphics.generateTexture('groundTexture', 8, 8);
+            
+            // OBSTÁCULOS MEJORADOS: PARLANTES ANIMADOS
+            
+            // Parlante pequeño (frame 1 - normal)
+            const speakerSmall1 = scene.make.graphics({x: 0, y: 0, add: false});
+            speakerSmall1.fillStyle(colors.obstacle, 1);
+            speakerSmall1.fillRect(0, 0, 20, 30); // caja del parlante
+            // Detalles del parlante
+            speakerSmall1.fillStyle(0x000000, 1);
+            speakerSmall1.fillRect(2, 2, 16, 26); // área de los conos
+            speakerSmall1.fillStyle(0x333333, 1);
+            speakerSmall1.fillCircle(10, 10, 6); // cono superior
+            speakerSmall1.fillCircle(10, 22, 4); // cono inferior
+            // Detalles metálicos
+            speakerSmall1.fillStyle(colors.guitar, 1);
+            speakerSmall1.fillRect(8, 2, 4, 1); // luz superior
+            speakerSmall1.fillCircle(10, 10, 1); // centro del cono
+            speakerSmall1.fillCircle(10, 22, 1); // centro del cono
+            speakerSmall1.generateTexture('speakerSmall1', 20, 30);
+            
+            // Parlante pequeño (frame 2 - vibrando)
+            const speakerSmall2 = scene.make.graphics({x: 0, y: 0, add: false});
+            speakerSmall2.fillStyle(colors.obstacle, 1);
+            speakerSmall2.fillRect(0, 0, 20, 30); // caja del parlante
+            // Detalles del parlante
+            speakerSmall2.fillStyle(0x000000, 1);
+            speakerSmall2.fillRect(2, 2, 16, 26); // área de los conos
+            speakerSmall2.fillStyle(0x333333, 1);
+            speakerSmall2.fillCircle(10, 10, 5); // cono superior (más pequeño, como empujado)
+            speakerSmall2.fillCircle(10, 22, 3); // cono inferior (más pequeño)
+            // Detalles metálicos
+            speakerSmall2.fillStyle(colors.guitar, 1);
+            speakerSmall2.fillRect(8, 2, 4, 1); // luz superior
+            speakerSmall2.fillCircle(10, 10, 1); // centro del cono
+            speakerSmall2.fillCircle(10, 22, 1); // centro del cono
+            speakerSmall2.generateTexture('speakerSmall2', 20, 30);
+            
+            // Parlante mediano (frame 1 - normal)
+            const speakerMedium1 = scene.make.graphics({x: 0, y: 0, add: false});
+            speakerMedium1.fillStyle(colors.obstacle, 1);
+            speakerMedium1.fillRect(0, 0, 30, 45); // caja del parlante
+            // Detalles del parlante
+            speakerMedium1.fillStyle(0x000000, 1);
+            speakerMedium1.fillRect(3, 3, 24, 39); // área de los conos
+            speakerMedium1.fillStyle(0x333333, 1);
+            speakerMedium1.fillCircle(15, 15, 9); // cono superior
+            speakerMedium1.fillCircle(15, 33, 6); // cono inferior
+            // Detalles metálicos y luces
+            speakerMedium1.fillStyle(colors.guitar, 1);
+            speakerMedium1.fillRect(12, 3, 6, 1); // luz superior
+            speakerMedium1.fillCircle(15, 15, 2); // centro del cono
+            speakerMedium1.fillCircle(15, 33, 1); // centro del cono
+            // Botones y controles
+            speakerMedium1.fillStyle(colors.player, 1);
+            speakerMedium1.fillRect(25, 5, 2, 2); // LED verde
+            speakerMedium1.generateTexture('speakerMedium1', 30, 45);
+            
+            // Parlante mediano (frame 2 - vibrando)
+            const speakerMedium2 = scene.make.graphics({x: 0, y: 0, add: false});
+            speakerMedium2.fillStyle(colors.obstacle, 1);
+            speakerMedium2.fillRect(0, 0, 30, 45); // caja del parlante
+            // Detalles del parlante
+            speakerMedium2.fillStyle(0x000000, 1);
+            speakerMedium2.fillRect(3, 3, 24, 39); // área de los conos
+            speakerMedium2.fillStyle(0x333333, 1);
+            speakerMedium2.fillCircle(15, 15, 7); // cono superior (más pequeño, como empujado)
+            speakerMedium2.fillCircle(15, 33, 4); // cono inferior (más pequeño)
+            // Detalles metálicos y luces
+            speakerMedium2.fillStyle(colors.guitar, 1);
+            speakerMedium2.fillRect(12, 3, 6, 1); // luz superior
+            speakerMedium2.fillCircle(15, 15, 2); // centro del cono
+            speakerMedium2.fillCircle(15, 33, 1); // centro del cono
+            // Botones y controles
+            speakerMedium2.fillStyle(colors.player, 1);
+            speakerMedium2.fillRect(25, 5, 2, 2); // LED verde
+            
+            // Ondas sonoras visibles (para efecto de vibración)
+            speakerMedium2.fillStyle(0xffffff, 0.3);
+            speakerMedium2.fillCircle(15, 15, 12); // onda exterior
+            speakerMedium2.generateTexture('speakerMedium2', 30, 45);
+            
+            // Pila de parlantes grande (frame 1)
+            const speakerStack1 = scene.make.graphics({x: 0, y: 0, add: false});
+            speakerStack1.fillStyle(colors.obstacle, 1);
+            speakerStack1.fillRect(0, 0, 35, 70); // caja principal
+            
+            // Separación entre parlantes
+            speakerStack1.fillStyle(0x000000, 0.8);
+            speakerStack1.fillRect(0, 35, 35, 2); // división entre parlantes
+            
+            // Parlante superior
+            speakerStack1.fillStyle(0x000000, 1);
+            speakerStack1.fillRect(4, 4, 27, 27); // área del cono superior
+            speakerStack1.fillStyle(0x333333, 1);
+            speakerStack1.fillCircle(17, 18, 10); // cono grande superior
+            
+            // Parlante inferior
+            speakerStack1.fillStyle(0x000000, 1);
+            speakerStack1.fillRect(4, 41, 27, 25); // área del cono inferior
+            speakerStack1.fillStyle(0x333333, 1);
+            speakerStack1.fillCircle(17, 53, 10); // cono grande inferior
+            
+            // Detalles metálicos y luces
+            speakerStack1.fillStyle(colors.guitar, 1);
+            speakerStack1.fillCircle(17, 18, 2); // centro del cono superior
+            speakerStack1.fillCircle(17, 53, 2); // centro del cono inferior
+            speakerStack1.fillRect(14, 4, 8, 2); // luz superior
+            
+            // Panel de control
+            speakerStack1.fillStyle(0x222222, 1);
+            speakerStack1.fillRect(4, 30, 27, 5); // panel de control
+            speakerStack1.fillStyle(colors.player, 1);
+            speakerStack1.fillRect(8, 31, 2, 2); // LED verde
+            speakerStack1.fillStyle(0xff0000, 1);
+            speakerStack1.fillRect(13, 31, 2, 2); // LED rojo
+            speakerStack1.fillStyle(colors.guitar, 1);
+            speakerStack1.fillRect(18, 31, 2, 2); // LED dorado
+            speakerStack1.generateTexture('speakerStack1', 35, 70);
+            
+            // Pila de parlantes grande (frame 2 - vibrando)
+            const speakerStack2 = scene.make.graphics({x: 0, y: 0, add: false});
+            speakerStack2.fillStyle(colors.obstacle, 1);
+            speakerStack2.fillRect(0, 0, 35, 70); // caja principal
+            
+            // Separación entre parlantes
+            speakerStack2.fillStyle(0x000000, 0.8);
+            speakerStack2.fillRect(0, 35, 35, 2); // división entre parlantes
+            
+            // Parlante superior
+            speakerStack2.fillStyle(0x000000, 1);
+            speakerStack2.fillRect(4, 4, 27, 27); // área del cono superior
+            speakerStack2.fillStyle(0x333333, 1);
+            speakerStack2.fillCircle(17, 18, 8); // cono grande superior (empujado)
+            
+            // Parlante inferior
+            speakerStack2.fillStyle(0x000000, 1);
+            speakerStack2.fillRect(4, 41, 27, 25); // área del cono inferior
+            speakerStack2.fillStyle(0x333333, 1);
+            speakerStack2.fillCircle(17, 53, 8); // cono grande inferior (empujado)
+            
+            // Detalles metálicos y luces
+            speakerStack2.fillStyle(colors.guitar, 1);
+            speakerStack2.fillCircle(17, 18, 2); // centro del cono superior
+            speakerStack2.fillCircle(17, 53, 2); // centro del cono inferior
+            speakerStack2.fillRect(14, 4, 8, 2); // luz superior
+            
+            // Panel de control
+            speakerStack2.fillStyle(0x222222, 1);
+            speakerStack2.fillRect(4, 30, 27, 5); // panel de control
+            speakerStack2.fillStyle(colors.player, 1);
+            speakerStack2.fillRect(8, 31, 2, 2); // LED verde
+            speakerStack2.fillStyle(0xff0000, 1);
+            speakerStack2.fillRect(13, 31, 2, 2); // LED rojo
+            speakerStack2.fillStyle(colors.guitar, 1);
+            speakerStack2.fillRect(18, 31, 2, 2); // LED dorado
+            
+            // Ondas sonoras visibles
+            speakerStack2.fillStyle(0xffffff, 0.3);
+            speakerStack2.fillCircle(17, 18, 14); // onda exterior superior
+            speakerStack2.fillCircle(17, 53, 14); // onda exterior inferior
+            speakerStack2.generateTexture('speakerStack2', 35, 70);
+            
+            // Monitor de escenario (obstáculo ancho y bajo - frame 1)
+            const monitorSpeaker1 = scene.make.graphics({x: 0, y: 0, add: false});
+            monitorSpeaker1.fillStyle(colors.specialObstacle, 1);
+            monitorSpeaker1.fillRect(0, 5, 50, 25); // caja inclinada
+            // Detalles del monitor
+            monitorSpeaker1.fillStyle(0x000000, 1);
+            monitorSpeaker1.fillRect(5, 10, 40, 15); // área del cono
+            monitorSpeaker1.fillStyle(0x333333, 1);
+            monitorSpeaker1.fillCircle(25, 18, 10); // cono principal
+            // Detalles metálicos
+            monitorSpeaker1.fillStyle(colors.guitar, 1);
+            monitorSpeaker1.fillCircle(25, 18, 2); // centro del cono
+            monitorSpeaker1.fillRect(5, 9, 5, 1); // conector izquierdo
+            monitorSpeaker1.fillRect(40, 9, 5, 1); // conector derecho
+            monitorSpeaker1.generateTexture('monitorSpeaker1', 50, 30);
+            
+            // Monitor de escenario (obstáculo ancho y bajo - frame 2)
+            const monitorSpeaker2 = scene.make.graphics({x: 0, y: 0, add: false});
+            monitorSpeaker2.fillStyle(colors.specialObstacle, 1);
+            monitorSpeaker2.fillRect(0, 5, 50, 25); // caja inclinada
+            // Detalles del monitor
+            monitorSpeaker2.fillStyle(0x000000, 1);
+            monitorSpeaker2.fillRect(5, 10, 40, 15); // área del cono
+            monitorSpeaker2.fillStyle(0x333333, 1);
+            monitorSpeaker2.fillCircle(25, 18, 8); // cono principal (empujado)
+            // Detalles metálicos
+            monitorSpeaker2.fillStyle(colors.guitar, 1);
+            monitorSpeaker2.fillCircle(25, 18, 2); // centro del cono
+            monitorSpeaker2.fillRect(5, 9, 5, 1); // conector izquierdo
+            monitorSpeaker2.fillRect(40, 9, 5, 1); // conector derecho
+            // Ondas sonoras visibles
+            monitorSpeaker2.fillStyle(0xffffff, 0.3);
+            monitorSpeaker2.fillCircle(25, 18, 15); // onda exterior
+            monitorSpeaker2.generateTexture('monitorSpeaker2', 50, 30);
+            
+            // Textura para guitar picks mejorada
+            const pickupGraphics = scene.make.graphics({x: 0, y: 0, add: false});
+            pickupGraphics.fillStyle(colors.pickup, 1);
+            
+            // Dibujar un guitar pick con forma triangular redondeada
+            pickupGraphics.beginPath();
+            pickupGraphics.moveTo(8, 0); // Punto superior
+            pickupGraphics.lineTo(0, 10); // Esquina inferior izquierda
+            pickupGraphics.lineTo(16, 10); // Esquina inferior derecha
+            pickupGraphics.closePath();
+            pickupGraphics.fillPath();
+            
+            // Añadir un pequeño agujero (detalle del pick)
+            pickupGraphics.fillStyle(0x000000, 1);
+            pickupGraphics.fillCircle(8, 5, 2);
+            
+            pickupGraphics.generateTexture('pickupTexture', 16, 12);
+            
+            // Texto "PICK" para los pickups especiales
+            const pickTextGraphics = scene.make.graphics({x: 0, y: 0, add: false});
+            pickTextGraphics.fillStyle(0x000000, 1);
+            pickTextGraphics.fillRect(2, 2, 2, 8); // P
+            pickTextGraphics.fillRect(2, 2, 4, 2); // P
+            pickTextGraphics.fillRect(2, 5, 4, 2); // P
+            pickTextGraphics.fillRect(6, 2, 2, 8); // I
+            pickTextGraphics.fillRect(10, 2, 2, 8); // C
+            pickTextGraphics.fillRect(10, 2, 4, 2); // C
+            pickTextGraphics.fillRect(10, 8, 4, 2); // C
+            pickTextGraphics.fillRect(16, 2, 2, 8); // K
+            pickTextGraphics.fillRect(16, 5, 4, 2); // K
+            pickTextGraphics.fillRect(18, 2, 2, 2); // K
+            pickTextGraphics.fillRect(18, 8, 2, 2); // K
+            pickTextGraphics.generateTexture('pickTextTexture', 22, 12);
+            
+            // Textura para partículas
+            const particleGraphics = scene.make.graphics({x: 0, y: 0, add: false});
+            particleGraphics.fillStyle(0xFFFFFF, 1);
+            particleGraphics.fillRect(0, 0, 2, 2);
+            particleGraphics.generateTexture('particleTexture', 2, 2);
+            
+            // Textura para partículas de notas musicales
+            const noteParticleGraphics = scene.make.graphics({x: 0, y: 0, add: false});
+            noteParticleGraphics.fillStyle(colors.pickup, 1);
+            // Corchea simplificada
+            noteParticleGraphics.fillRect(0, 0, 2, 8);
+            noteParticleGraphics.fillCircle(4, 8, 4);
+            noteParticleGraphics.generateTexture('noteParticleTexture', 8, 12);
+            
+            // Textura para ondas sonoras
+            const soundWaveGraphics = scene.make.graphics({x: 0, y: 0, add: false});
+            soundWaveGraphics.fillStyle(0xFFFFFF, 0.5);
+            // Dibujar ondas semicirculares
+            soundWaveGraphics.fillCircle(10, 0, 2);
+            soundWaveGraphics.fillCircle(10, 0, 5);
+            soundWaveGraphics.fillCircle(10, 0, 8);
+            soundWaveGraphics.generateTexture('soundWaveTexture', 20, 10);
+        }
+        
+        // Crear fondo mejorado con gradiente de colores
+        function createEnhancedBackground(scene) {
+            // Crear un gradiente retro
+            const background = scene.add.graphics();
+            
+            const height = game.config.height - 50; // Reservamos espacio para la ciudad
+            const segmentHeight = height / colors.sky.length;
+            
+            // Dibujar el gradiente pixelado con más niveles
+            for (let i = 0; i < colors.sky.length; i++) {
+                background.fillStyle(colors.sky[i], 1);
+                background.fillRect(0, i * segmentHeight, game.config.width, segmentHeight + 1); // +1 para evitar líneas entre segmentos
+            }
+            
+            // Agregar estrellas pixeladas (más variadas)
+            for (let i = 0; i < 60; i++) {
+                const x = Phaser.Math.Between(0, game.config.width);
+                const y = Phaser.Math.Between(0, height);
+                let size = Phaser.Math.Between(1, 2);
+                
+                // Algunas estrellas más grandes y brillantes (como luces de escenario)
+                if (i % 10 === 0) {
+                    size = Phaser.Math.Between(2, 3);
+                    const star = scene.add.rectangle(x, y, size, size, colors.pickup);
+                    
+                    // Efecto de luz de escenario que se mueve
+                    scene.tweens.add({
+                        targets: star,
+                        x: x + Phaser.Math.Between(-20, 20),
+                        y: y + Phaser.Math.Between(-10, 10),
+                        alpha: 0.5,
+                        duration: Phaser.Math.Between(2000, 5000),
+                        yoyo: true,
+                        repeat: -1,
+                        delay: Phaser.Math.Between(0, 2000)
+                    });
+                } else {
+                    // Estrellas normales que parpadean
+                    const star = scene.add.rectangle(x, y, size, size, 0xffffff);
+                    
+                    scene.tweens.add({
+                        targets: star,
+                        alpha: 0,
+                        duration: Phaser.Math.Between(1000, 3000),
+                        yoyo: true,
+                        repeat: -1,
+                        delay: Phaser.Math.Between(0, 2000)
+                    });
+                }
+            }
+        }
+        
+        // Variables para edificios dinámicos
+        let lastBuildingTime = 0;
+        let nextBuildingTime = 0;
+        
+        // Crear cityscape (mucho más minimalista)
+        function createCityscape(scene) {
+            // Sólo dos capas de edificios
+            buildingsBack = scene.add.group();
+            buildingsMid = scene.add.group();
+            buildingsFront = scene.add.group();
+            
+            // Programar la generación del primer edificio
+            nextBuildingTime = Phaser.Math.Between(1000, 3000);
+            
+            // Iniciar el sistema de generación de edificios
+            scene.time.addEvent({
+                delay: 500, // Comprobar cada medio segundo
+                callback: () => updateBuildings(scene),
+                callbackScope: scene,
+                loop: true
+            });
+        }
+        
+        // Sistema para generar edificios espaciados temporalmente
+        function updateBuildings(scene) {
+            if (gameOver) {
+                return;
+            }
+            
+            // Actualizar contador de tiempo
+            lastBuildingTime += 500;
+            
+            // Comprobar si es momento de crear un nuevo edificio
+            if (lastBuildingTime >= nextBuildingTime) {
+                // Crear un nuevo edificio
+                createBuilding(scene);
+                
+                // Resetear contador y establecer tiempo para el próximo edificio (entre 10-15 segundos)
+                lastBuildingTime = 0;
+                nextBuildingTime = Phaser.Math.Between(5000, 10000); // Más frecuentes para un ambiente urbano rock
+            }
+            
+            // Limpiar edificios que salen de la pantalla
+            buildingsBack.getChildren().forEach(building => {
+                if (building.x < -building.width) {
+                    building.destroy();
+                }
+            });
+            
+            buildingsMid.getChildren().forEach(building => {
+                if (building.x < -building.width) {
+                    building.destroy();
+                }
+            });
+            
+            buildingsFront.getChildren().forEach(building => {
+                if (building.x < -building.width) {
+                    building.destroy();
+                }
+            });
+        }
+        
+        // Crear un edificio único
+        function createBuilding(scene) {
+            // Decidir aleatoriamente qué tipo/capa de edificio crear
+            const layer = Phaser.Math.Between(1, 3);
+            
+            // Configuración del edificio según la capa
+            let buildingConfig = {
+                width: 0,
+                height: 0,
+                color: 0,
+                group: null,
+                speed: 0,
+                y: 0
+            };
+            
+            switch(layer) {
+                case 1: // Capa trasera (más lenta, más oscura)
+                    buildingConfig.width = Phaser.Math.Between(20, 50);
+                    buildingConfig.height = Phaser.Math.Between(30, 60);
+                    buildingConfig.color = colors.buildings[0];
+                    buildingConfig.group = buildingsBack;
+                    buildingConfig.speed = gameSpeed / 5;
+                    buildingConfig.y = game.config.height - 8 - 10;
+                    break;
+                case 2: // Capa media
+                    buildingConfig.width = Phaser.Math.Between(30, 60);
+                    buildingConfig.height = Phaser.Math.Between(40, 80);
+                    buildingConfig.color = colors.buildings[1];
+                    buildingConfig.group = buildingsMid;
+                    buildingConfig.speed = gameSpeed / 3;
+                    buildingConfig.y = game.config.height - 8 - 5;
+                    break;
+                case 3: // Capa frontal (más rápida, más clara)
+                    buildingConfig.width = Phaser.Math.Between(40, 70);
+                    buildingConfig.height = Phaser.Math.Between(60, 100);
+                    buildingConfig.color = colors.buildings[2];
+                    buildingConfig.group = buildingsFront;
+                    buildingConfig.speed = gameSpeed / 1.5;
+                    buildingConfig.y = game.config.height - 8;
+                    break;
+            }
+            
+            // Crear el edificio gráfico
+            const building = scene.add.graphics();
+            building.fillStyle(buildingConfig.color, 1);
+            building.fillRect(0, 0, buildingConfig.width, buildingConfig.height);
+            
+            // Añadir ventanas aleatorias para estilo urbano
+            building.fillStyle(0xffff44, 0.5); // Ventanas amarillas semi-transparentes
+            
+            // Patrón de ventanas
+            const windowSize = 3;
+            const windowSpacing = 6;
+            
+            for (let x = 5; x < buildingConfig.width - 5; x += windowSpacing) {
+                for (let y = 5; y < buildingConfig.height - 10; y += windowSpacing) {
+                    // Solo dibujar algunas ventanas aleatoriamente
+                    if (Math.random() > 0.6) {
+                        building.fillRect(x, y, windowSize, windowSize);
+                    }
+                }
+            }
+            
+            // Carteles de neón (ocasionalmente)
+            if (Math.random() > 0.7) {
+                building.fillStyle(colors.pickup, 0.8);
+                building.fillRect(
+                    buildingConfig.width / 2 - 10, 
+                    5, 
+                    20, 
+                    8
+                );
+            }
+            
+            // Convertir a textura para mejor rendimiento
+            const texture = building.generateTexture('building_' + Date.now(), buildingConfig.width, buildingConfig.height);
+            building.destroy();
+            
+            // Crear sprite con la textura generada
+            const buildingSprite = scene.add.sprite(
+                game.config.width + buildingConfig.width/2,
+                buildingConfig.y - buildingConfig.height/2,
+                texture.key
+            );
+            
+            // Guardar propiedades necesarias
+            buildingSprite.setOrigin(0.5, 0.5);
+            buildingSprite.width = buildingConfig.width;
+            buildingSprite.height = buildingConfig.height;
+            buildingSprite.moveSpeed = buildingConfig.speed;
+            
+            // Añadir al grupo correspondiente
+            buildingConfig.group.add(buildingSprite);
+        }
+        
+        // Sistema para generar obstáculos y pickups de forma más aleatoria
+        function spawnObjects(scene) {
+            if (gameOver) {
+                return;
+            }
+            
+            // Actualizar la dificultad
+            updateDifficulty();
+            
+            // Actualizar el texto de dificultad
+            difficultyText.setText('Dificultad: ' + difficultyLevel);
+            
+            // Comprobación aleatoria para generar obstáculos
+            // Ahora más impredecible debido a la mayor frecuencia de comprobación
+            if (Phaser.Math.Between(1, 100) <= obstacleChance * 100) {
+                // Seleccionar un tipo de obstáculo según la dificultad
+                createRandomObstacle(scene);
+            }
+            
+            // Decidir si generar un pickup (guitar pick)
+            // Menos frecuente que los obstáculos para hacerlos más valiosos
+            if (Math.random() < 0.1 + (0.01 * difficultyLevel)) { // Aumenta ligeramente con la dificultad
+                createPickup(scene);
+            }
+            
+            // En niveles altos, a veces crear patrones de obstáculos
+            if (difficultyLevel >= 6 && Math.random() < 0.05) {
+                createObstaclePattern(scene);
+            }
+        }
+        
+        // Actualizar la dificultad en función del score
+        function updateDifficulty() {
+            // Calcular el nivel de dificultad basado en la puntuación - mucho más gradual
+            const newLevel = Math.min(10, Math.floor(score / 70) + 1);
+            
+            // Si cambia el nivel, actualizar parámetros
+            if (newLevel !== difficultyLevel) {
+                difficultyLevel = newLevel;
+                
+                // Ajustar parámetros según el nivel - dificultad muy reducida
+                obstacleChance = Math.min(0.85, 0.4 + (difficultyLevel * 0.03));
+                gameSpeed = Math.min(400, 150 + (difficultyLevel * 20));
+            }
+        }
+        
+        // Crear un obstáculo aleatorio
+        function createRandomObstacle(scene) {
+            if (gameOver) {
+                return;
+            }
+            
+            // Tipo de obstáculo según dificultad
+            let obstacleType = "speakerSmall";
+            let typeChance = Math.random();
+            
+            // A mayor dificultad, más variedad de obstáculos
+            if (difficultyLevel >= 2 && typeChance > 0.6) {
+                obstacleType = "speakerMedium";
+            }
+            if (difficultyLevel >= 3 && typeChance > 0.8) {
+                obstacleType = "monitorSpeaker";
+            }
+            if (difficultyLevel >= 5 && typeChance > 0.9) {
+                obstacleType = "speakerStack";
+            }
+            
+            // Configuración según tipo de obstáculo
+            let config = {
+                texture1: "speakerSmall1",
+                texture2: "speakerSmall2",
+                width: 20,
+                height: 30
+            };
+            
+            switch (obstacleType) {
+                case "speakerMedium":
+                    config.texture1 = "speakerMedium1";
+                    config.texture2 = "speakerMedium2";
+                    config.width = 30;
+                    config.height = 45;
+                    break;
+                case "monitorSpeaker":
+                    config.texture1 = "monitorSpeaker1";
+                    config.texture2 = "monitorSpeaker2";
+                    config.width = 50;
+                    config.height = 30;
+                    break;
+                case "speakerStack":
+                    config.texture1 = "speakerStack1";
+                    config.texture2 = "speakerStack2";
+                    config.width = 35;
+                    config.height = 70;
+                    break;
+            }
+            
+            // Crear el obstáculo con el primer frame
+            const obstacle = obstacles.create(
+                game.config.width + config.width, 
+                game.config.height - config.height/2 - 8, 
+                config.texture1
+            );
+            
+            // Guardar las texturas para la animación
+            obstacle.texture1 = config.texture1;
+            obstacle.texture2 = config.texture2;
+            
+            // Configurar el obstáculo
+            obstacle.setDisplaySize(config.width, config.height);
+            obstacle.setImmovable(true);
+            obstacle.body.allowGravity = false;
+            
+            // Configurar animación de parlante vibrando
+            scene.time.addEvent({
+                delay: 200,
+                repeat: -1,
+                callback: () => {
+                    if (obstacle.active) {
+                        // Alternar entre los dos frames
+                        obstacle.setTexture(
+                            obstacle.texture === obstacle.texture1 ? 
+                            obstacle.texture2 : obstacle.texture1
+                        );
+                        
+                        // Añadir efecto de ondas sonoras ocasionalmente
+                        if (Math.random() > 0.7) {
+                            createSoundWave(scene, obstacle.x, obstacle.y - config.height/4);
+                        }
+                    }
+                }
+            });
+            
+            // A mayor nivel, obstáculos más difíciles
+            if (difficultyLevel > 2 && Math.random() > 0.7) {
+                // Añadir velocidad propia a algunos obstáculos
+                obstacle.extraSpeed = Phaser.Math.Between(20, 40);
+            }
+        }
+        
+        // Crear efecto de ondas sonoras
+        function createSoundWave(scene, x, y) {
+            const wave = scene.add.image(x, y, 'soundWaveTexture');
+            wave.setAlpha(0.3);
+            
+            // Animar la onda expandiéndose y desvaneciéndose
+            scene.tweens.add({
+                targets: wave,
+                x: x + Phaser.Math.Between(-5, 5), // movimiento aleatorio
+                y: y + Phaser.Math.Between(-10, 10),
+                alpha: 0,
+                scale: 1.5,
+                duration: 300,
+                onComplete: () => {
+                    wave.destroy();
+                }
+            });
+        }
+        
+        // Crear patrones de obstáculos para mayor dificultad
+        function createObstaclePattern(scene) {
+            if (gameOver) {
+                return;
+            }
+            
+            // Elegir un patrón según la dificultad
+            const patternType = Phaser.Math.Between(1, Math.min(difficultyLevel, 5));
+            
+            switch (patternType) {
+                case 1: // Patrón básico: dos parlantes pequeños separados
+                    createDelayedObstacles(scene, ["speakerSmall", "speakerSmall"], 500);
+                    break;
+                case 2: // Patrón avanzado: parlante y monitor
+                    createDelayedObstacles(scene, ["speakerSmall", "monitorSpeaker"], 700);
+                    break;
+                case 3: // Patrón difícil: tres obstáculos consecutivos
+                    createDelayedObstacles(scene, ["speakerSmall", "speakerMedium", "speakerSmall"], 600);
+                    break;
+                case 4: // Patrón experto: combinación con parlante grande
+                    createDelayedObstacles(scene, ["monitorSpeaker", "speakerSmall", "speakerStack"], 600);
+                    break;
+                case 5: // Patrón maestro: obstáculos altos y bajos intercalados
+                    createDelayedObstacles(scene, ["speakerStack", "monitorSpeaker", "speakerMedium"], 1000);
+                    break;
+            }
+        }
+        
+        // Crear obstáculos con delay entre ellos (para patrones)
+        function createDelayedObstacles(scene, types, delay) {
+            let currentDelay = 0;
+            
+            types.forEach(type => {
+                scene.time.delayedCall(currentDelay, () => {
+                    // Configuración según tipo
+                    let config = {
+                        texture1: "speakerSmall1",
+                        texture2: "speakerSmall2",
+                        width: 20,
+                        height: 30
+                    };
+                    
+                    switch (type) {
+                        case "speakerMedium":
+                            config.texture1 = "speakerMedium1";
+                            config.texture2 = "speakerMedium2";
+                            config.width = 30;
+                            config.height = 45;
+                            break;
+                        case "monitorSpeaker":
+                            config.texture1 = "monitorSpeaker1";
+                            config.texture2 = "monitorSpeaker2";
+                            config.width = 50;
+                            config.height = 30;
+                            break;
+                        case "speakerStack":
+                            config.texture1 = "speakerStack1";
+                            config.texture2 = "speakerStack2";
+                            config.width = 35;
+                            config.height = 70;
+                            break;
+                    }
+                    
+                    // Crear obstáculo
+                    if (!gameOver) {
+                        const obstacle = obstacles.create(
+                            game.config.width + config.width, 
+                            game.config.height - config.height/2 - 8, 
+                            config.texture1
+                        );
+                        
+                        // Guardar las texturas para la animación
+                        obstacle.texture1 = config.texture1;
+                        obstacle.texture2 = config.texture2;
+                        
+                        obstacle.setDisplaySize(config.width, config.height);
+                        obstacle.setImmovable(true);
+                        obstacle.body.allowGravity = false;
+                        
+                        // Configurar animación de parlante vibrando
+                        scene.time.addEvent({
+                            delay: 200,
+                            repeat: -1,
+                            callback: () => {
+                                if (obstacle.active) {
+                                    // Alternar entre los dos frames
+                                    obstacle.setTexture(
+                                        obstacle.texture === obstacle.texture1 ? 
+                                        obstacle.texture2 : obstacle.texture1
+                                    );
+                                    
+                                    // Añadir efecto de ondas sonoras ocasionalmente
+                                    if (Math.random() > 0.7) {
+                                        createSoundWave(scene, obstacle.x, obstacle.y - config.height/4);
+                                    }
+                                }
+                            }
+                        });
+                    }
+                });
+                
+                currentDelay += delay;
+            });
+        }
+        
+        // Crear un pickup (guitar pick)
+        function createPickup(scene) {
+            if (gameOver) {
+                return;
+            }
+            
+            // Altura variable para los pickups
+            const pickupY = Phaser.Math.Between(
+                game.config.height - 120, // Más alto para mayor desafío
+                game.config.height - 50
+            );
+            
+            // Ocasionalmente, crear pickups especiales que dan más puntos
+            const isSpecial = Math.random() > 0.8;
+            
+            const pickup = pickups.create(
+                game.config.width + 20, 
+                pickupY, 
+                'pickupTexture'
+            );
+            
+            pickup.setDisplaySize(16, 12);
+            pickup.originalY = pickupY; // Guardar posición Y original para el movimiento ondulante
+            pickup.body.allowGravity = false;
+            pickup.special = isSpecial;
+            
+            // Pickups especiales con más valor
+            if (isSpecial) {
+                pickup.setTint(0xffd700); // Dorado para especiales
+                pickup.points = 10;
+                
+                // Añadir texto "PICK" sobre el pickup especial
+                const pickText = scene.add.image(
+                    game.config.width + 20,
+                    pickupY - 15,
+                    'pickTextTexture'
+                );
+                pickText.setDisplaySize(22, 12);
+                
+                // Asociar el texto al pickup para que se muevan juntos
+                pickup.pickText = pickText;
+                
+                // Añadir movimiento extra al pickup especial
+                scene.tweens.add({
+                    targets: pickup,
+                    angle: 360,
+                    duration: 2000,
+                    repeat: -1
+                });
+            } else {
+                pickup.points = 5;
+                
+                // Efecto de brillo/parpadeo
+                scene.tweens.add({
+                    targets: pickup,
+                    alpha: 0.7,
+                    duration: 500,
+                    yoyo: true,
+                    repeat: -1
+                });
+            }
+        }
+        
+        // Actualizar el juego
+        function update(time, delta) {
+            if (gameOver) {
+                return;
+            }
+            
+            // Incrementar velocidad gradualmente (muy reducido)
+            gameSpeed += 0.003 * difficultyLevel; // Incremento mucho más suave
+            
+            // Incrementar puntuación (más gradual)
+            score += 0.1 * (1 + (difficultyLevel * 0.05));
+            scoreText.setText('Score: ' + Math.floor(score));
+            
+            // Mover obstáculos y pickups
+            obstacles.getChildren().forEach(obstacle => {
+                // Velocidad base + velocidad extra si tiene
+                const speed = gameSpeed + (obstacle.extraSpeed || 0);
+                obstacle.x -= speed * delta / 1000;
+                
+                // Eliminar obstáculos que salen de la pantalla
+                if (obstacle.x < -obstacle.displayWidth) {
+                    obstacle.destroy();
+                }
+            });
+            
+            pickups.getChildren().forEach(pickup => {
+                pickup.x -= gameSpeed * delta / 1000;
+                
+                // Movimiento ondulante para los pickups
+                pickup.y = pickup.originalY + Math.sin(time / 200 + pickup.x / 50) * 5;
+                
+                // Mover el texto junto con el pickup especial si existe
+                if (pickup.pickText) {
+                    pickup.pickText.x = pickup.x;
+                    pickup.pickText.y = pickup.y - 15;
+                }
+                
+                // Eliminar pickups que salen de la pantalla
+                if (pickup.x < -pickup.displayWidth) {
+                    if (pickup.pickText) {
+                        pickup.pickText.destroy();
+                    }
+                    pickup.destroy();
+                }
+            });
+            
+            // Verificar si el jugador está en el suelo o saltando
+            const onGround = player.body.touching.down;
+            
+            // Actualizar la animación del jugador
+            if (onGround) {
+                if (isJumping) {
+                    isJumping = false;
+                }
+                
+                // Animación de correr (estilo rockero)
+                playerFrameTime += delta;
+                if (playerFrameTime > 1000 / playerFrameRate) {
+                    playerFrameTime = 0;
+                    playerFrame = (playerFrame + 1) % 3; // 3 frames: 0, 1, 2
+                    player.setTexture('playerTexture' + playerFrame);
+                }
+            } else {
+                // Animación de salto
+                player.setTexture('playerJumpTexture');
+            }
+            
+            // Mover edificios con efecto parallax
+            buildingsBack.getChildren().forEach(building => {
+                building.x -= building.moveSpeed * delta / 1000;
+            });
+            
+            buildingsMid.getChildren().forEach(building => {
+                building.x -= building.moveSpeed * delta / 1000;
+            });
+            
+            buildingsFront.getChildren().forEach(building => {
+                building.x -= building.moveSpeed * delta / 1000;
+            });
+        }
+        
+        // Función para saltar
+        function jump(scene) {
+            if (gameOver) {
+                return;
+            }
+            
+            if (player.body.touching.down && !isJumping) {
+                player.setVelocityY(jumpVelocity);
+                isJumping = true;
+                
+                // Efecto de polvo al saltar
+                createJumpEffect(scene);
+            }
+        }
+        
+        // Crear efecto de salto con partículas
+        function createJumpEffect(scene) {
+            for (let i = 0; i < 6; i++) {
+                const particle = scene.add.image(
+                    player.x - 5 + Math.random() * 10, 
+                    player.y + 20, 
+                    'particleTexture'
+                ).setAlpha(0.7);
+                
+                // Color aleatorio entre verde y rojo (colores de la temática)
+                if (Math.random() > 0.5) {
+                    particle.setTint(colors.pickup);
+                } else {
+                    particle.setTint(colors.player);
+                }
+                
+                scene.tweens.add({
+                    targets: particle,
+                    x: particle.x - 15 + Math.random() * 30,
+                    y: particle.y + 10 + Math.random() * 10,
+                    alpha: 0,
+                    scale: 0.5,
+                    duration: 300,
+                    onComplete: () => {
+                        particle.destroy();
+                    }
+                });
+            }
+        }
+        
+        // Colectar un pickup
+        function collectPickup(player, pickup) {
+            // Dar puntos según el tipo de pickup
+            const pointsGained = pickup.points || 5;
+            
+            // Incrementar contador
+            picksCollected++;
+            picksText.setText('Picks: ' + picksCollected);
+            
+            // Efecto visual
+            createPickupCollectEffect(this, pickup.x, pickup.y, pickup.special);
+            
+            // Destruir el texto asociado si existe
+            if (pickup.pickText) {
+                pickup.pickText.destroy();
+            }
+            
+            // Destruir el pickup
+            pickup.destroy();
+            
+            // Dar puntos extra
+            score += pointsGained;
+        }
+        
+        // Efecto al recoger un pickup
+        function createPickupCollectEffect(scene, x, y, isSpecial) {
+            // Destello
+            const flash = scene.add.rectangle(x, y, 30, 30, colors.pickup, 0.7);
+            
+            scene.tweens.add({
+                targets: flash,
+                alpha: 0,
+                scale: 2,
+                duration: 300,
+                onComplete: () => {
+                    flash.destroy();
+                }
+            });
+            
+            // Partículas
+            const particleCount = isSpecial ? 16 : 8; // Más partículas para pickups especiales
+            
+            for (let i = 0; i < particleCount; i++) {
+                // Notas musicales como partículas para efectos especiales
+                if (isSpecial && i % 2 === 0) {
+                    const note = scene.add.image(x, y, 'noteParticleTexture')
+                        .setAlpha(0.8)
+                        .setScale(0.7);
+                    
+                    if (i % 4 === 0) {
+                        note.setTint(colors.player); // Alternar colores
+                    }
+                    
+                    const angle = Math.random() * Math.PI * 2;
+                    const speed = 30 + Math.random() * 50;
+                    const vx = Math.cos(angle) * speed;
+                    const vy = Math.sin(angle) * speed;
+                    
+                    scene.tweens.add({
+                        targets: note,
+                        x: note.x + vx,
+                        y: note.y + vy,
+                        alpha: 0,
+                        duration: 800,
+                        onComplete: () => {
+                            note.destroy();
+                        }
+                    });
+                } else {
+                    // Partículas normales
+                    const particle = scene.add.image(x, y, 'particleTexture')
+                        .setTint(isSpecial ? 0xffd700 : colors.pickup)
+                        .setAlpha(0.8);
+                    
+                    const angle = Math.random() * Math.PI * 2;
+                    const speed = 30 + Math.random() * 50;
+                    const vx = Math.cos(angle) * speed;
+                    const vy = Math.sin(angle) * speed;
+                    
+                    scene.tweens.add({
+                        targets: particle,
+                        x: particle.x + vx,
+                        y: particle.y + vy,
+                        alpha: 0,
+                        duration: 500,
+                        onComplete: () => {
+                            particle.destroy();
+                        }
+                    });
+                }
+            }
+            
+            // Para pickups especiales, añadir un texto "+10"
+            if (isSpecial) {
+                const pointsText = scene.add.text(x, y - 20, '+10', {
+                    fontSize: '10px',
+                    fontFamily: 'Courier New',
+                    color: '#ffd700',
+                    stroke: '#000',
+                    strokeThickness: 2
+                }).setOrigin(0.5);
+                
+                scene.tweens.add({
+                    targets: pointsText,
+                    y: pointsText.y - 30,
+                    alpha: 0,
+                    duration: 1000,
+                    onComplete: () => {
+                        pointsText.destroy();
+                    }
+                });
+            }
+        }
+        
+        // Colisión con obstáculo
+        function hitObstacle(player, obstacle) {
+            if (gameOver) {
+                return;
+            }
+            
+            this.physics.pause();
+            player.setTint(0xff0000);
+            gameOver = true;
+            
+            // Efecto de explosión
+            createExplosionEffect(this, player.x, player.y);
+            
+            // Mensaje de Game Over
+            const gameOverText = this.add.text(game.config.width / 2, game.config.height / 2 - 40, 'GAME OVER', {
+                fontSize: '24px',
+                fontFamily: 'Courier New',
+                color: '#e62954',
+                stroke: '#000',
+                strokeThickness: 4,
+                align: 'center',
+                fontWeight: 'bold',
+                resolution: 2
+            }).setOrigin(0.5);
+            
+            // Mostrar puntuación final
+            const finalScoreText = this.add.text(game.config.width / 2, game.config.height / 2, 
+                'Score: ' + Math.floor(score) + '\nPicks: ' + picksCollected, {
+                fontSize: '16px',
+                fontFamily: 'Courier New',
+                color: '#ffffff',
+                align: 'center',
+                stroke: '#000000',
+                strokeThickness: 2,
+                fontWeight: 'bold',
+                resolution: 2
+            }).setOrigin(0.5);
+            
+            // Mensaje para reiniciar
+            const restartText = this.add.text(game.config.width / 2, game.config.height / 2 + 35, 'Click para reiniciar', {
+                fontSize: '16px',
+                fontFamily: 'Courier New',
+                color: '#50fa7b',
+                align: 'center',
+                stroke: '#000000',
+                strokeThickness: 2,
+                fontWeight: 'bold',
+                resolution: 2
+            }).setOrigin(0.5);
+            
+            // Efecto de parpadeo con colores alternantes para el texto de reinicio
+            this.tweens.add({
+                targets: restartText,
+                alpha: 0.7,
+                duration: 500,
+                yoyo: true,
+                repeat: -1,
+                onYoyo: () => {
+                    restartText.setColor(restartText.style.color === '#50fa7b' ? '#e62954' : '#50fa7b');
+                }
+            });
+            
+            // Añadir un mensaje sobre la dificultad alcanzada
+            const levelText = this.add.text(game.config.width / 2, game.config.height / 2 + 65, 
+                '¡Llegaste al nivel ' + difficultyLevel + '!', {
+                fontSize: '14px',
+                fontFamily: 'Courier New',
+                color: '#ffffff',
+                align: 'center',
+                stroke: '#000000',
+                strokeThickness: 2,
+                fontWeight: 'bold',
+                resolution: 2
+            }).setOrigin(0.5);
+            
+            // Reiniciar juego al hacer clic
+            this.input.once('pointerdown', () => {
+                this.scene.restart();
+                gameSpeed = 200;
+                score = 0;
+                picksCollected = 0;
+                obstacleChance = 0.7;
+                obstacleInterval = 2000;
+                difficultyLevel = 1;
+                gameOver = false;
+            });
+        }
+        
+        // Crear explosión con partículas
+        function createExplosionEffect(scene, x, y) {
+            // Efecto de destello
+            const flash = scene.add.rectangle(x, y, 100, 100, 0xffffff, 1);
+            scene.tweens.add({
+                targets: flash,
+                alpha: 0,
+                duration: 200,
+                onComplete: () => {
+                    flash.destroy();
+                }
+            });
+            
+            // Partículas de explosión
+            for (let i = 0; i < 40; i++) {
+                const angle = Math.random() * Math.PI * 2;
+                const speed = 50 + Math.random() * 150;
+                
+                // Alternar entre partículas rojas y naranjas para efecto de fuego
+                const color = i % 2 === 0 ? 0xff5555 : 0xff8800;
+                
+                const particle = scene.add.image(x, y, 'particleTexture')
+                    .setTint(color)
+                    .setAlpha(0.8)
+                    .setScale(1.5);
+                
+                const vx = Math.cos(angle) * speed;
+                const vy = Math.sin(angle) * speed;
+                
+                scene.tweens.add({
+                    targets: particle,
+                    x: particle.x + vx,
+                    y: particle.y + vy,
+                    alpha: 0,
+                    scale: 0.5,
+                    duration: 800,
+                    onComplete: () => {
+                        particle.destroy();
+                    }
+                });
+            }
+            
+            // Piezas de la guitarra "volando"
+            for (let i = 0; i < 5; i++) {
+                const piece = scene.add.rectangle(
+                    x, 
+                    y, 
+                    Phaser.Math.Between(5, 10), 
+                    Phaser.Math.Between(5, 15), 
+                    i % 2 === 0 ? colors.player : colors.guitar
+                );
+                
+                const angle = Math.random() * Math.PI * 2;
+                const speed = 100 + Math.random() * 200;
+                const vx = Math.cos(angle) * speed;
+                const vy = Math.sin(angle) * speed - 200; // Hacia arriba
+                
+                // Simular física para las piezas
+                scene.tweens.add({
+                    targets: piece,
+                    x: piece.x + vx,
+                    y: piece.y + vy,
+                    angle: Phaser.Math.Between(-720, 720),
+                    duration: 1000,
+                    ease: 'Quad.out',
+                    onComplete: () => {
+                        // Caída
+                        scene.tweens.add({
+                            targets: piece,
+                            y: game.config.height + 50,
+                            duration: 500,
+                            ease: 'Quad.in',
+                            onComplete: () => {
+                                piece.destroy();
+                            }
+                        });
+                    }
+                });
+            }
+        }
+    </script>
+</body>
+</html>
